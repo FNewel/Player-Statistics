@@ -1,6 +1,7 @@
 package github.fnewell.playerstatistics.db;
 
-import github.fnewell.playerstatistics.PlayerStatistics;
+import github.fnewell.playerstatistics.utils.ConfigUtils;
+import github.fnewell.playerstatistics.utils.PSLogger;
 import net.fabricmc.loader.api.FabricLoader;
 
 import java.net.URI;
@@ -16,91 +17,104 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Map;
 
-
+/**
+ * Utility class for handling driver-related operations.
+ */
 public class DriverUtils {
 
     public static DriverShim customDriverShim;
+    private static final String DB_TYPE = ConfigUtils.config.getConfig("database").getString("type");
+
+    // Driver map: DB type → [cesta k JAR, JDBC classpath]
+    private static final Map<String, String[]> DRIVERS = Map.of(
+            "SQLITE",
+            new String[] { "mods/player-statistics/libs/sqlite-jdbc-3.47.1.0.jar", "org.sqlite.JDBC" },
+            "MYSQL",
+            new String[] { "mods/player-statistics/libs/mysql-connector-j-9.2.0.jar", "com.mysql.cj.jdbc.Driver" },
+            "MARIADB",
+            new String[] { "mods/player-statistics/libs/mariadb-java-client-3.5.1.jar", "org.mariadb.jdbc.Driver" },
+            "POSTGRESQL",
+            new String[] { "mods/player-statistics/libs/postgresql-42.7.4.jar", "org.postgresql.Driver" });
 
     /**
-      * Function to register a custom SQLite JDBC driver via DriverShim
-      */
-    public static void registerSQLite() {
+     * Function to register a custom SQLite JDBC driver via DriverShim
+     * 
+     * @throws RuntimeException If an error occurs during the registration process
+     */
+    public static void registerDriver() throws RuntimeException {
         try {
-            if(PlayerStatistics.DEBUG) { PlayerStatistics.LOGGER.info("Registering custom SQLite JDBC driver ..."); }
+            PSLogger.debug("Registering custom {} driver ...", DB_TYPE);
 
             // Path to the custom SQLite JDBC driver
-            Path driverPath = FabricLoader.getInstance().getGameDir().resolve("mods/player-statistics/libs/sqlite-jdbc-3.47.1.0.jar");
+            Path driverPath = FabricLoader.getInstance().getGameDir().resolve(DRIVERS.get(DB_TYPE)[0]);
             URL driverUrl = driverPath.toUri().toURL();
 
-            if(PlayerStatistics.DEBUG) { PlayerStatistics.LOGGER.info("Driver URL: {}", driverUrl); }
+            PSLogger.debug("Driver URL: {}", driverUrl);
 
             // Load driver via custom ClassLoader
-            URLClassLoader loader = new URLClassLoader(new URL[]{driverUrl}, ClassLoader.getPlatformClassLoader());
-            Class<?> driverClass = Class.forName("org.sqlite.JDBC", true, loader);
+            URLClassLoader loader = new URLClassLoader(new URL[] { driverUrl }, ClassLoader.getPlatformClassLoader());
+            Class<?> driverClass = Class.forName(DRIVERS.get(DB_TYPE)[1], true, loader);
             Driver customDriver = (Driver) driverClass.getDeclaredConstructor().newInstance();
 
-            if(PlayerStatistics.DEBUG) { PlayerStatistics.LOGGER.info("Driver Class: {}; Loaded from: {}", customDriver.getClass().getName(), customDriver.getClass().getProtectionDomain().getCodeSource().getLocation()); }
+            PSLogger.debug("Driver Class: {}; Loaded from: {}", customDriver.getClass().getName(),
+                    customDriver.getClass().getProtectionDomain().getCodeSource().getLocation());
 
-            // Registration DriverShim instead of the original driver
+            // Register DriverShim instead of the original driver
             customDriverShim = new DriverShim(customDriver);
             DriverManager.registerDriver(customDriverShim);
-            if(PlayerStatistics.DEBUG) { PlayerStatistics.LOGGER.info("Custom SQLite JDBC driver registered!"); }
+            PSLogger.debug("Custom {} driver registered!", DB_TYPE);
         } catch (Exception e) {
-            if(PlayerStatistics.DEBUG) { PlayerStatistics.LOGGER.info("Trace: ", e); }
-            PlayerStatistics.LOGGER.error("Failed to register custom SQLite driver via DriverShim: {}", e.getMessage());
+            PSLogger.debug("Trace: ", e);
+            throw new RuntimeException(
+                    "Failed to register custom " + DB_TYPE + " driver via DriverShim: " + e.getMessage());
         }
     }
 
     /**
-      * Entry point to check for required drivers and download them if missing.
-      */
-    public static void checkDrivers() {
+     * Entry point to check for required drivers and download them if missing.
+     * 
+     * @throws RuntimeException If an error occurs during the check or download process
+     */
+    public static void checkDrivers() throws RuntimeException {
         try {
-            if(PlayerStatistics.DEBUG) { PlayerStatistics.LOGGER.info("Checking for required drivers ..."); }
+            PSLogger.debug("Checking for required drivers ...");
 
             // Check and download missing drivers
             Map<String, String> drivers = Map.of(
-                    "sqlite-jdbc-3.47.1.0.jar", "https://repo1.maven.org/maven2/org/xerial/sqlite-jdbc/3.47.1.0/sqlite-jdbc-3.47.1.0.jar",
-                    "mariadb-java-client-3.5.1.jar", "https://repo1.maven.org/maven2/org/mariadb/jdbc/mariadb-java-client/3.5.1/mariadb-java-client-3.5.1.jar",
-                    "postgresql-42.7.4.jar", "https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar"
-            );
+                    "sqlite-jdbc-3.47.1.0.jar",
+                    "https://repo1.maven.org/maven2/org/xerial/sqlite-jdbc/3.47.1.0/sqlite-jdbc-3.47.1.0.jar",
+                    "mariadb-java-client-3.5.1.jar",
+                    "https://repo1.maven.org/maven2/org/mariadb/jdbc/mariadb-java-client/3.5.1/mariadb-java-client-3.5.1.jar",
+                    "postgresql-42.7.4.jar",
+                    "https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar",
+                    "mysql-connector-j-9.2.0.jar",
+                    "https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/9.2.0/mysql-connector-j-9.2.0.jar");
 
-            ensureDriversExist(drivers, FabricLoader.getInstance().getGameDir().resolve("mods/player-statistics/libs"));
+            Path driverFolder = FabricLoader.getInstance().getGameDir().resolve("mods/player-statistics/libs");
 
-            if(PlayerStatistics.DEBUG) { PlayerStatistics.LOGGER.info("Required drivers checked!"); }
-        } catch (Exception e) {
-            if(PlayerStatistics.DEBUG) { PlayerStatistics.LOGGER.info("Trace: ", e); }
-            PlayerStatistics.LOGGER.error("Failed to check required drivers: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Check if required driver JARs exist, and download them if missing.
-     *
-     * @param drivers A map where the key is the JAR file name and the value is the download URL.
-     * @param driverFolder The folder where the drivers should be located.
-     * @throws IOException If an error occurs while checking or downloading files.
-     */
-    public static void ensureDriversExist(Map<String, String> drivers, Path driverFolder) throws IOException, InterruptedException {
-        if(PlayerStatistics.DEBUG) { PlayerStatistics.LOGGER.info("Checking for required drivers (ensureDriversExist)..."); }
-
-        // Ensure the folder exists
-        if (!Files.exists(driverFolder)) {
-            Files.createDirectories(driverFolder);
-        }
-
-        // Check and download missing drivers
-        for (Map.Entry<String, String> entry : drivers.entrySet()) {
-            String fileName = entry.getKey();
-            String downloadUrl = entry.getValue();
-
-            Path filePath = driverFolder.resolve(fileName);
-
-            if (!Files.exists(filePath)) {
-                downloadFile(downloadUrl, filePath);
-            } else {
-                if(PlayerStatistics.DEBUG) { PlayerStatistics.LOGGER.info("Driver {} already exists.", fileName); }
+            // Ensure the folder exists
+            if (!Files.exists(driverFolder)) {
+                Files.createDirectories(driverFolder);
             }
+
+            // Check and download missing drivers
+            for (Map.Entry<String, String> entry : drivers.entrySet()) {
+                String fileName = entry.getKey();
+                String downloadUrl = entry.getValue();
+
+                Path filePath = driverFolder.resolve(fileName);
+
+                if (!Files.exists(filePath)) {
+                    downloadFile(downloadUrl, filePath);
+                } else {
+                    PSLogger.debug("Driver {} already exists.", fileName);
+                }
+            }
+
+            PSLogger.debug("Required drivers checked!");
+        } catch (Exception e) {
+            PSLogger.debug("Trace: ", e);
+            throw new RuntimeException("Failed to check required drivers: " + e.getMessage());
         }
     }
 
@@ -113,7 +127,7 @@ public class DriverUtils {
      * @throws InterruptedException If the download is interrupted.
      */
     private static void downloadFile(String fileUrl, Path destination) throws IOException, InterruptedException {
-        PlayerStatistics.LOGGER.info("Downloading {} to {}", fileUrl, destination);
+        PSLogger.info("Downloading {} to {}", fileUrl, destination);
 
         HttpResponse<Path> response;
         try (HttpClient client = HttpClient.newHttpClient()) {
@@ -128,6 +142,6 @@ public class DriverUtils {
             throw new IOException("Failed to download file: " + fileUrl + " (HTTP " + response.statusCode() + ")");
         }
 
-        PlayerStatistics.LOGGER.info("... successfully downloaded");
+        PSLogger.info("... successfully downloaded");
     }
 }
